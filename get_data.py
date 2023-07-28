@@ -31,25 +31,56 @@ def get_text_from_docx(filename):
 
 @retry(Exception, tries=3, delay=5, backoff=2, max_delay=60)
 def get_gpt_4_score(t):
-    prompt = f"""I'm trying to determine if a letter from a company to its shareholders is "sensebreaking" or "sensegiving". Below is a letter from a company to its shareholders. Score the letter on a scale from -1 (sensebreaking) to 1 (sensegiving). Only output the numerical score from a scale of -1 to 1, no other values or text. Here are a few examples.
+    prompt = f"""I am a shareholder.  I am trying to determine the score of a letter from a company to its shareholders in terms of ""sensebreaking"" vs ""sensegiving"", where neutral is the midpoint.
+I need a score for each sentence of the letter, on a scale from -1 (sensebreaking) to 1 (sensegiving), with a precision of 0.1. Use a continuous scale of -1 (full sensebreaking) to 1 (full sensegiving). Sensegiving is subjective, oriented toward the future and has a positive tone. Sensebreaking is subjective, oriented toward the past, and has an emotionally negative tone. When the sentence looks fully neutral, assign zero. Here are a few examples of scoring sentences:
 
-    Text:
-    The year 2003 was not lacking in drama. . . . The work conducted during the merger preparation did not go to waste, however. It will come in handy as we develop the Office. 
-    Score: 1
+Text: I see [the organizational transformation] as a very beneficial development. 
+Score: 1
 
-    Text: Since the merger was first hinted at, the Office personnel has had to live with a noose around their necks, uncertain about when they finally open the hatch and let them hang.
-    Score: -1
-    
-    Text:
-    Even though the information session did not offer much new information about the forthcoming merger,
-it was made perfectly clear that the Office personnel stand united, willing to participate in the planning of our future together
-    Score: 1
+Text: We are back to being errand boys to the Ministry.
+Score: -1
 
-    Text: We are back to being errand boys to the Ministry.
-    Score: -1
+Text: Over the past five years, we have reinvested more than$1.6 billion in our business  
+Score: 0
 
-    Text: {t}
-    Score:"""
+Text: What we have now is a really old-school bureaucracy.
+Score: -1
+
+Text: This year, we celebrate our 40th anniversary.
+Score: 0
+
+Text: The work conducted during the merger preparation will come in handy as we develop the Office.
+Score: 1
+
+Text: The Office should never have been founded in the first place
+Score: -1
+
+Text: You will find our performance numbers elsewhere in this report. 
+Score: 0
+
+Text: I at least am confident about the future, as this [merger] gives us the opportunity to retain our organizational culture.
+Score: 1
+
+Text: Let us continue to look at the future with curiosity and resolve.
+Score: 1
+
+Text: Since the merger was first hinted at, the Office personnel has had to live with a noose around their necks, uncertain about when they finally open the hatch and let them hang.
+Score: -1
+
+Text: [The merger]came to nothing and we needed to return to the old way.
+Score: -1
+
+Text: Japan, 30 years ago, was our first international market.  
+Score: 0
+
+Text: We welcomed three new members to our Board of Directors this year. 
+Score: 0
+
+Text: It was made perfectly clear that the Office personnel stand united, willing to participate in the planning of our future together.
+Score: 1
+
+Text: {t.strip()}
+Score:"""
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
@@ -135,6 +166,14 @@ def score(df):
     return df
 
 
+def parse_firm_id(file_name):
+    file_array = file_name.split("_")
+    if len(file_array[0]) == 2:
+        return int(file_array[0])
+    else:
+        return int(file_array[1])
+
+
 def main(load_from_cache=False, sample=-1):
     if load_from_cache:
         df = pd.read_parquet("./output/data.parquet")
@@ -143,22 +182,27 @@ def main(load_from_cache=False, sample=-1):
     data = []
     for root, _, files in os.walk("data"):
         for file in files:
-            if file.endswith(".docx"):
-                data_dict = {
-                    "file": os.path.join(root, file),
-                    "text": get_text_from_docx(os.path.join(root, file)),
-                }
-                if "NFF" in file:
-                    data_dict["firm_type"] = "non_family_firm"
-                elif "FF" in file:
-                    data_dict["firm_type"] = "family_firm"
-                else:
-                    data_dict["firm_type"] = "other"
-                    print("Found other firm type")
+            if not file.endswith(".docx"):
+                continue
 
-                data.append(data_dict)
+            data_dict = {
+                "file": os.path.join(root, file),
+                "text": get_text_from_docx(os.path.join(root, file)),
+            }
+            data_dict["firm_type"] = (
+                "non_family_firm" if "NFF" in file else "family_firm"
+            )
+
+            data_dict["firm_id"] = parse_firm_id(file)
+
+            data.append(data_dict)
 
     df = pd.DataFrame(data)
+
     if sample > 0 and sample < len(df):
-        df = df.sample(n=sample)
+        sample_id = int(sample / 2)
+        df = df[df["firm_id"] <= sample_id]
+
+    df.sort_values(by="firm_id", inplace=True)
+
     return df
