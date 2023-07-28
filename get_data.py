@@ -1,3 +1,4 @@
+import json
 import os
 
 import docx
@@ -103,19 +104,21 @@ def average(list_values):
     return sum(list_values) / len(list_values)
 
 
-def get_bert_sentiment(corpus):
+def get_bert_sentiment(corpus, file_names):
     scores = []
-    for document in tqdm(corpus):
+    for document, file_name in tqdm(zip(corpus, file_names)):
         sentences = sent_tokenize(document)
 
         list_scores = classify(sentences, truncation=True)
         transformed_list_scores = []
-        for score in list_scores:
+        sentence_score_map = {}
+        for i, score in enumerate(list_scores):
             new_score_d = {}
 
             for d in score:
                 new_score_d[d["label"]] = d["score"]
             transformed_list_scores.append(new_score_d)
+            sentence_score_map[sentences[i]] = new_score_d
 
         scores.append(
             {
@@ -131,38 +134,42 @@ def get_bert_sentiment(corpus):
                 "AVG_NEUTRAL": average([x["NEUTRAL"] for x in transformed_list_scores]),
             }
         )
+        with open(f"./output/{file_name.split('.doc')[0]}_bert.json", mode="w") as f:
+            json.dump(sentence_score_map, f)
     return scores
 
 
-def get_gpt_sentiment(corpus):
+def get_gpt_sentiment(corpus, file_names):
     scores = []
-    for document in tqdm(corpus):
+    for document, file_name in tqdm(zip(corpus, file_names)):
         sentences = sent_tokenize(document)
-        list_scores = []
+        sentence_score_map = {}
         fail_ct = 0
         for sent in sentences:
             score = get_gpt_4_score(sent)
             try:
                 score = float(score)
-                list_scores.append(score)
+                sentence_score_map[sent] = score
             except:
                 print("GPT parsing failed")
-                list_scores.append(0)
+                sentence_score_map[sent] = 0
                 fail_ct += 1
         print("Fail:", fail_ct)
-        print("Total:", len(list_scores))
+        print("Total:", len(sentence_score_map))
         scores.append(
             {
-                "MEDIAN_SCORE": median(list_scores),
-                "AVG_SCORE": average(list_scores),
+                "MEDIAN_SCORE": median(list(sentence_score_map.values())),
+                "AVG_SCORE": average(list(sentence_score_map.values())),
             }
         )
+        with open(f"./output/{file_name.split('.doc')[0]}_gpt.json", mode="w") as f:
+            json.dump(sentence_score_map, f)
     return scores
 
 
 def score(df):
-    df["bert_neutral"] = get_bert_sentiment(df["text"].values)
-    df["gpt_scores"] = get_gpt_sentiment(df["text"].values)
+    df["bert_neutral"] = get_bert_sentiment(df["text"].values, df["file"].values)
+    # df["gpt_scores"] = get_gpt_sentiment(df["text"].values, df["file"].values)
     return df
 
 
@@ -186,7 +193,8 @@ def main(load_from_cache=False, sample=-1):
                 continue
 
             data_dict = {
-                "file": os.path.join(root, file),
+                "path": os.path.join(root, file),
+                "file": file,
                 "text": get_text_from_docx(os.path.join(root, file)),
             }
             data_dict["firm_type"] = (
