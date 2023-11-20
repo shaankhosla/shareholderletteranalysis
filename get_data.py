@@ -165,7 +165,7 @@ def load_df(load_from_cache: bool = False, sample: int = -1) -> pd.DataFrame:
             if not file.endswith(".docx"):
                 continue
 
-            data_dict = {
+            data_dict: dict[str, str | int] = {
                 "path": os.path.join(root, file),
                 "file": file,
                 "text": get_text_from_docx(os.path.join(root, file)),
