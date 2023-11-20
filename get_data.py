@@ -9,6 +9,8 @@ from retry import retry  # type: ignore
 from tqdm import tqdm  # type: ignore
 from transformers import pipeline
 
+from prompts import emotion, reframing, stakeholder, subective, visionary
+
 load_dotenv()
 
 
@@ -35,60 +37,11 @@ def get_text_from_docx(filename: str) -> str:
 
 
 @retry(Exception, tries=3, delay=5, backoff=2, max_delay=60)
-def get_gpt_4_score(t: str) -> str:
-    prompt = f"""I am a shareholder.  I am trying to determine the score of a letter from a company to its shareholders in terms of ""sensebreaking"" vs ""sensegiving"", where neutral is the midpoint.
-I need a score for each sentence of the letter, on a scale from -1 (sensebreaking) to 1 (sensegiving), with a precision of 0.1. Use a continuous scale of -1 (full sensebreaking) to 1 (full sensegiving). Sensegiving is subjective, oriented toward the future and has a positive tone. Sensebreaking is subjective, oriented toward the past, and has an emotionally negative tone. When the sentence looks fully neutral, assign zero. Here are a few examples of scoring sentences:
-
-Text: I see [the organizational transformation] as a very beneficial development. 
-Score: 1
-
-Text: We are back to being errand boys to the Ministry.
-Score: -1
-
-Text: Over the past five years, we have reinvested more than$1.6 billion in our business  
-Score: 0
-
-Text: What we have now is a really old-school bureaucracy.
-Score: -1
-
-Text: This year, we celebrate our 40th anniversary.
-Score: 0
-
-Text: The work conducted during the merger preparation will come in handy as we develop the Office.
-Score: 1
-
-Text: The Office should never have been founded in the first place
-Score: -1
-
-Text: You will find our performance numbers elsewhere in this report. 
-Score: 0
-
-Text: I at least am confident about the future, as this [merger] gives us the opportunity to retain our organizational culture.
-Score: 1
-
-Text: Let us continue to look at the future with curiosity and resolve.
-Score: 1
-
-Text: Since the merger was first hinted at, the Office personnel has had to live with a noose around their necks, uncertain about when they finally open the hatch and let them hang.
-Score: -1
-
-Text: [The merger]came to nothing and we needed to return to the old way.
-Score: -1
-
-Text: Japan, 30 years ago, was our first international market.  
-Score: 0
-
-Text: We welcomed three new members to our Board of Directors this year. 
-Score: 0
-
-Text: It was made perfectly clear that the Office personnel stand united, willing to participate in the planning of our future together.
-Score: 1
-
-Text: {t.strip()}
-Score:"""
+def get_gpt_4_score(prompt: str, sentence: str) -> str:
+    prompt_to_send = prompt + sentence
     response = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt_to_send}],
     )
     scores = response["choices"][0]["message"]["content"]
     return scores
@@ -110,7 +63,11 @@ def average(list_values: list[float]) -> float:
 
 def get_sense_scores(corpus: list[str], file_names: list[str]) -> pd.DataFrame:
     df = []
-    for document, file_name in tqdm(zip(corpus, file_names)):
+    for document, file_name in tqdm(
+        zip(corpus, file_names),
+        total=len(corpus),
+        desc="Getting scores",
+    ):
         # convert document to sentences
         sentences = sent_tokenize(document)
 
@@ -118,9 +75,9 @@ def get_sense_scores(corpus: list[str], file_names: list[str]) -> pd.DataFrame:
         bert_subjective_scores = subjective_classify(sentences, truncation=True)
         bert_emotion_scores = emotion_classify(sentences, truncation=True)
 
-        for i, sentence in enumerate(sentences):
+        for i, sent in enumerate(sentences):
             sentence_score_map = {
-                "sentence": sentence,
+                "sentence": sent,
                 "file": file_name,
             }
 
@@ -132,14 +89,11 @@ def get_sense_scores(corpus: list[str], file_names: list[str]) -> pd.DataFrame:
             for d in bert_emotion_scores[i]:
                 sentence_score_map[d["label"] + "_bert"] = d["score"]
 
-            # try to get score from GPT-4
-            gpt_score = get_gpt_4_score(sentence)
-            try:
-                gpt_score = float(gpt_score)
-            except:
-                gpt_score = None
-                print("GPT parsing failed")
-            sentence_score_map["gpt_score"] = gpt_score
+            sentence_score_map["emotion_gpt"] = get_gpt_4_score(emotion, sent)
+            sentence_score_map["stakeholder_gpt"] = get_gpt_4_score(stakeholder, sent)
+            sentence_score_map["reframing_gpt"] = get_gpt_4_score(reframing, sent)
+            sentence_score_map["vision_gpt"] = get_gpt_4_score(visionary, sent)
+            sentence_score_map["subjective_gpt"] = get_gpt_4_score(subective, sent)
 
             df.append(sentence_score_map)
     df = pd.DataFrame(df)
