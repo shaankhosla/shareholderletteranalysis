@@ -1,13 +1,12 @@
-import json
 import os
 
-import docx
-import openai
-import pandas as pd
-from dotenv import load_dotenv
-from nltk.tokenize import sent_tokenize
-from retry import retry
-from tqdm import tqdm
+import docx  # type: ignore
+import openai  # type: ignore
+import pandas as pd  # type: ignore
+from dotenv import load_dotenv  # type: ignore
+from nltk.tokenize import sent_tokenize  # type: ignore
+from retry import retry  # type: ignore
+from tqdm import tqdm  # type: ignore
 from transformers import pipeline
 
 load_dotenv()
@@ -15,14 +14,19 @@ load_dotenv()
 
 openai.api_key = os.getenv("OPENAI_KEY")
 
-classify = pipeline(
+subjective_classify = pipeline(
     task="text-classification",
     model="cffl/bert-base-styleclassification-subjective-neutral",
     return_all_scores=True,
 )
+emotion_classify = pipeline(
+    "text-classification",
+    model="bhadresh-savani/distilbert-base-uncased-emotion",
+    return_all_scores=True,
+)
 
 
-def get_text_from_docx(filename):
+def get_text_from_docx(filename: str) -> str:
     doc = docx.Document(filename)
     fullText = []
     for para in doc.paragraphs:
@@ -31,7 +35,7 @@ def get_text_from_docx(filename):
 
 
 @retry(Exception, tries=3, delay=5, backoff=2, max_delay=60)
-def get_gpt_4_score(t):
+def get_gpt_4_score(t: str) -> str:
     prompt = f"""I am a shareholder.  I am trying to determine the score of a letter from a company to its shareholders in terms of ""sensebreaking"" vs ""sensegiving"", where neutral is the midpoint.
 I need a score for each sentence of the letter, on a scale from -1 (sensebreaking) to 1 (sensegiving), with a precision of 0.1. Use a continuous scale of -1 (full sensebreaking) to 1 (full sensegiving). Sensegiving is subjective, oriented toward the future and has a positive tone. Sensebreaking is subjective, oriented toward the past, and has an emotionally negative tone. When the sentence looks fully neutral, assign zero. Here are a few examples of scoring sentences:
 
@@ -90,7 +94,7 @@ Score:"""
     return scores
 
 
-def median(list_values):
+def median(list_values: list[float]) -> float:
     list_values.sort()
     if len(list_values) % 2 == 0:
         return (
@@ -100,80 +104,49 @@ def median(list_values):
         return list_values[len(list_values) // 2]
 
 
-def average(list_values):
+def average(list_values: list[float]) -> float:
     return sum(list_values) / len(list_values)
 
 
-def get_bert_sentiment(corpus, file_names):
-    scores = []
+def get_sense_scores(corpus: list[str], file_names: list[str]) -> pd.DataFrame:
+    df = []
     for document, file_name in tqdm(zip(corpus, file_names)):
+        # convert document to sentences
         sentences = sent_tokenize(document)
 
-        list_scores = classify(sentences, truncation=True)
-        transformed_list_scores = []
-        sentence_score_map = {}
-        for i, score in enumerate(list_scores):
-            new_score_d = {}
+        # get all bert scores
+        bert_subjective_scores = subjective_classify(sentences, truncation=True)
+        bert_emotion_scores = emotion_classify(sentences, truncation=True)
 
-            for d in score:
-                new_score_d[d["label"]] = d["score"]
-            transformed_list_scores.append(new_score_d)
-            sentence_score_map[sentences[i]] = new_score_d
-
-        scores.append(
-            {
-                "MEDIAN_SUBJECTIVE": median(
-                    [x["SUBJECTIVE"] for x in transformed_list_scores]
-                ),
-                "MEDIAN_NEUTRAL": median(
-                    [x["NEUTRAL"] for x in transformed_list_scores]
-                ),
-                "AVG_SUBJECTIVE": average(
-                    [x["SUBJECTIVE"] for x in transformed_list_scores]
-                ),
-                "AVG_NEUTRAL": average([x["NEUTRAL"] for x in transformed_list_scores]),
+        for i, sentence in enumerate(sentences):
+            sentence_score_map = {
+                "sentence": sentence,
+                "file": file_name,
             }
-        )
-        with open(f"./output/{file_name.split('.doc')[0]}_bert.json", mode="w") as f:
-            json.dump(sentence_score_map, f)
-    return scores
 
+            # get score from bert subjective
+            for d in bert_subjective_scores[i]:
+                sentence_score_map[d["label"] + "_bert"] = d["score"]
 
-def get_gpt_sentiment(corpus, file_names):
-    scores = []
-    for document, file_name in tqdm(zip(corpus, file_names)):
-        sentences = sent_tokenize(document)
-        sentence_score_map = {}
-        fail_ct = 0
-        for sent in sentences:
-            score = get_gpt_4_score(sent)
+            # get score from bert emotion
+            for d in bert_emotion_scores[i]:
+                sentence_score_map[d["label"] + "_bert"] = d["score"]
+
+            # try to get score from GPT-4
+            gpt_score = get_gpt_4_score(sentence)
             try:
-                score = float(score)
-                sentence_score_map[sent] = score
+                gpt_score = float(gpt_score)
             except:
+                gpt_score = None
                 print("GPT parsing failed")
-                sentence_score_map[sent] = 0
-                fail_ct += 1
-        print("Fail:", fail_ct)
-        print("Total:", len(sentence_score_map))
-        scores.append(
-            {
-                "MEDIAN_SCORE": median(list(sentence_score_map.values())),
-                "AVG_SCORE": average(list(sentence_score_map.values())),
-            }
-        )
-        with open(f"./output/{file_name.split('.doc')[0]}_gpt.json", mode="w") as f:
-            json.dump(sentence_score_map, f)
-    return scores
+            sentence_score_map["gpt_score"] = gpt_score
 
-
-def score(df):
-    df["bert_neutral"] = get_bert_sentiment(df["text"].values, df["file"].values)
-    # df["gpt_scores"] = get_gpt_sentiment(df["text"].values, df["file"].values)
+            df.append(sentence_score_map)
+    df = pd.DataFrame(df)
     return df
 
 
-def parse_firm_id(file_name):
+def parse_firm_id(file_name: str) -> int:
     file_array = file_name.split("_")
     if len(file_array[0]) == 2:
         return int(file_array[0])
@@ -181,7 +154,7 @@ def parse_firm_id(file_name):
         return int(file_array[1])
 
 
-def main(load_from_cache=False, sample=-1):
+def load_df(load_from_cache: bool = False, sample: int = -1) -> pd.DataFrame:
     if load_from_cache:
         df = pd.read_parquet("./output/data.parquet")
         return df

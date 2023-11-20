@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore
 
 
 def average(list_values):
@@ -16,7 +16,6 @@ def median(list_values):
 
 
 def distribution_plot(dict_emotion_list_scores, title, ct):
-
     emotions = list(dict_emotion_list_scores.keys())
     average_emotion_scores = [
         average(dict_emotion_list_scores[emotion]) for emotion in emotions
