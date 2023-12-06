@@ -3,6 +3,7 @@ import os
 import docx  # type: ignore
 import openai  # type: ignore
 import pandas as pd  # type: ignore
+from diskcache import Cache
 from dotenv import load_dotenv  # type: ignore
 from nltk.tokenize import sent_tokenize  # type: ignore
 from retry import retry  # type: ignore
@@ -15,6 +16,7 @@ load_dotenv()
 
 
 openai.api_key = os.getenv("OPENAI_KEY")
+MODEL = os.getenv("MODEL", "gpt-4")
 
 subjective_classify = pipeline(
     task="text-classification",
@@ -39,11 +41,16 @@ def get_text_from_docx(filename: str) -> str:
 @retry(Exception, tries=3, delay=5, backoff=2, max_delay=60)
 def get_gpt_4_score(prompt: str, sentence: str) -> str:
     prompt_to_send = prompt + sentence
+    with Cache("gpt_cache") as cache:
+        if prompt_to_send in cache:
+            return cache[prompt_to_send]
     response = openai.ChatCompletion.create(
-        model="gpt-4",
+        model=MODEL,
         messages=[{"role": "user", "content": prompt_to_send}],
     )
     scores = response["choices"][0]["message"]["content"]
+    with Cache("gpt_cache") as cache:
+        cache[prompt_to_send] = scores
     return scores
 
 
@@ -75,7 +82,9 @@ def get_sense_scores(corpus: list[str], file_names: list[str]) -> pd.DataFrame:
         bert_subjective_scores = subjective_classify(sentences, truncation=True)
         bert_emotion_scores = emotion_classify(sentences, truncation=True)
 
-        for i, sent in enumerate(sentences):
+        for i, sent in tqdm(
+            enumerate(sentences), total=len(sentences), desc="Sentence level"
+        ):
             sentence_score_map = {
                 "sentence": sent,
                 "file": file_name,
